@@ -84,7 +84,16 @@ Copy to
 
 It can also be run as a demo program by running p3drdscr.exe.
 
-または、p3drdscr.exe をデモプログラムとして実行できます。
+または、p3drdscr.exe をデモプログラムとして実行できます。デモプログラムとして動かした場合は、以下のキー入力とコマンドラインオプションを受け付けます。
+
+* A key : FPS display enable / disable.
+* Z key : Change Virtual screen size.
+* X key : Change framerate.
+* C key Change zoom kind. (0. gzoom + gcopy -> 1. grotate -> 2. gsquare)
+* Up, Down key : Speed Up / Down
+* Left, Right key : Shift X position.
+* Add command line option "/C" : Display config window.
+
 
 License
 -------
