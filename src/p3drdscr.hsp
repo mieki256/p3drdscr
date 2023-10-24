@@ -1,0 +1,2061 @@
+    ; 疑似3D道路スクリーンセーバ / pseudo 3D road screensaver
+    ;
+    ; ## コマンドラインオプション
+    ;
+    ; /S  フルスクリーン表示
+    ; /C  設定画面表示
+    ; /P  プレビュー画面表示
+    ;
+    ; ## キー割り当て(exeの実行時)
+    ;
+    ; A key: FPS表示/非表示切替
+    ; Z key: 仮想画面の解像度変更
+    ; X key: フレームレート変更
+    ; C key: 描画メソッド切替(gzoom, grotate, gsquareで循環)
+    ; Up, Down key : アクセル,ブレーキ
+    ; Left, Right key: 横移動
+    ;
+    ; Windows10 x64 22H2 + HSP 3.7beta7
+    ;
+    ; v.1.0.0 2023/10/25 by mieki256
+
+    #include "hspmath.as"
+    #include "d3m.hsp"
+    
+    #uselib "kernel32"
+    #func GetModuleFileName "GetModuleFileNameA" int, int, int
+
+    ; 以下の行をコメントアウトすればexeになる
+    ; #define SCRSAVER_ENABLE
+
+    ; ----------------------------------------
+    ; 同梱ファイル / bundled files
+    #define SPR_FILE        "tex.png"
+    #define BG0_FILE        "bg.jpg"
+    ; #define BG0_FILE      "bg.png"
+    #define PREVIEW_FILE    "preview.bmp"
+    
+    #pack SPR_FILE
+    #pack BG0_FILE
+    #pack PREVIEW_FILE
+
+    #define TITLESTR    "Pseudo 3d road screensaver"
+    #define VERSTR      "1.0.0"
+    
+    #define MYFILENAME      "p3drdscr"
+    #define INI_FILENAME    "p3drdscr.ini"
+    #packopt name           "p3drdscr"      ; exe filename
+
+#ifdef SCRSAVER_ENABLE
+    #packopt type 2             ; generate ".scr"
+    #define MAIN_WDW_ID     2   ; Main window ID
+#else
+    #packopt type 0             ; generate ".exe"
+    #define MAIN_WDW_ID     0   ; Main window ID
+#endif
+    
+    ; ----------------------------------------
+    ; ウインドウ表示時の実画面解像度
+    
+    ; 16:9
+    ; #define SCR_W       640
+    ; #define SCR_H       360
+    ; #define SCR_W       1280
+    ; #define SCR_H       720
+    ; #define SCR_W       1600
+    ; #define SCR_H       900
+    ; #define SCR_W       1920
+    ; #define SCR_H       1080
+    
+    ; 4:3
+    ; #define SCR_W       640
+    ; #define SCR_H       480
+    ; #define SCR_W       800
+    ; #define SCR_H       600
+    #define SCR_W       1024
+    #define SCR_H       768
+    ; #define SCR_W       1200
+    ; #define SCR_H       900
+    
+    ; default (config) windows size
+    #packopt xsize 640
+    #packopt ysize 320
+    ; #packopt xsize SCR_W
+    ; #packopt ysize SCR_H
+
+    ; フルスクリーン表示
+    #define FULLSCR_ENABLE
+
+    ; 周回数
+    #define LAPS_LIMIT      2
+    
+    ; 開発用 : セグメントの区切りを色分け. 0 or 1 or 2
+    #define SEG_DELIMITER   0
+    
+    ; ----------------------------------------
+    ; フレームレート (FPS) / framerate
+    dim framerate_list, 9
+    framerate_list = 8, 10, 12, 15, 20, 24, 30, 50, 60
+    
+    ; ----------------------------------------
+    ; 仮想画面解像度 / virtual screen resolution
+
+    ; 配列初期化用マクロ
+    #define set_array_n2(%1, %2, %3, %4) \
+        %1(%2, 0) = %3 :\
+        %1(%2, 1) = %4 :
+    
+    dim vscr_size, 8, 2
+    ; 変数名, index, width, height
+    set_array_n2 vscr_size, 0,  320, 180
+    set_array_n2 vscr_size, 1,  480, 270
+    set_array_n2 vscr_size, 2,  512, 288
+    set_array_n2 vscr_size, 3,  640, 360
+    set_array_n2 vscr_size, 4,  800, 450
+    set_array_n2 vscr_size, 5, 1024, 576
+    set_array_n2 vscr_size, 6, 1280, 720
+    set_array_n2 vscr_size, 7, 1920, 1080
+    
+    #define VSCR_W_MAX  1920
+    #define VSCR_H_MAX  1080
+
+    ; ----------------------------------------
+    ; read ini file
+    
+    gosub *default_ini_value_init
+    gosub *read_ini
+    
+    ; ----------------------------------------
+    ; prase command line option
+    
+    s = dir_cmdline         ; get command line option
+    i = instr(s, 0, "/")    ; search "/"
+    
+    if i == -1 {
+        ; no option
+#ifdef SCRSAVER_ENABLE
+        goto *job_config
+#else
+        goto *job_fullscreen
+#endif
+    }
+    
+    a = strmid(s, i, 2)     ; get 2 character
+    if a == "/p" or a == "/P" : goto *job_preview
+    if a == "/s" or a == "/S" : goto *job_fullscreen
+    if a == "/c" or a == "/C" : goto *job_config
+    dialog "Error : Unknown switch [" + s + "]"
+    end
+
+*job_preview
+    goto *display_preview
+
+*job_config
+    goto *display_config
+
+*job_fullscreen
+    ; randomize 0
+    randomize
+    
+#ifdef FULLSCR_ENABLE
+    ; fullscreen
+    
+    ; get desktop size
+    screen_w = ginfo_dispx
+    screen_h = ginfo_dispy
+    
+    bgscr MAIN_WDW_ID, screen_w, screen_h, , 0, 0
+    gsel MAIN_WDW_ID
+    cls 4
+#else
+    ; windows display
+    screen MAIN_WDW_ID, SCR_W, SCR_H, 0
+    
+    ; get windows size
+    gsel MAIN_WDW_ID
+    screen_w = ginfo_winx
+    screen_h = ginfo_winy
+    cls 4
+#endif
+    
+    ; init virtual screen buffer
+    vscrbufid = 4
+    buffer vscrbufid, VSCR_W_MAX, VSCR_H_MAX
+    dispw = vscr_size(vscr_size_idx, 0)
+    disph = vscr_size(vscr_size_idx, 1)
+
+    ; init temporary image buffer
+    tmpid = 5
+    buffer tmpid, 4096, 4096
+    
+    ; init black image
+    fadeid = 6
+    buffer fadeid, 1920, 1080
+    gsel fadeid
+    color 0, 0, 0
+    boxf
+    
+    ; load spite image
+    sprimgid0 = 7
+    buffer sprimgid0, 2048, 3072
+    picload SPR_FILE
+    spr0w = ginfo_winx
+    spr0h = ginfo_winy
+    
+    ; load bg image and scaling
+    #define BGID_START      10
+    gosub *init_bg
+    
+    ; 画面までの距離 / distance to screen
+    #define FOV     120.0
+    dist = double(dispw / 2) / tan(deg2rad(FOV / 2))
+    
+    ; これより小さいz値ならスプライト描画をしない
+    #define SPR_Z_LIMIT     (184.0 / 2.0)
+    
+    ; ----------------------------------------
+    ; texture table
+    
+    ; 2次元配列初期化用マクロ
+    #define set_array_n4(%1, %2, %3, %4, %5, %6) \
+        %1(%2, 0) = %3 :\
+        %1(%2, 1) = %4 :\
+        %1(%2, 2) = %5 :\
+        %1(%2, 3) = %6 :
+
+    dim tex_pos, 21, 4
+    
+    ; set_array_n4 配列変数名, index, x, y, w, h
+    set_array_n4 tex_pos,  0,    0,    0,  512,  512    ; tree 0
+    set_array_n4 tex_pos,  1,  512,    0,  512,  512    ; tree 1
+    set_array_n4 tex_pos,  2, 1024,    0,  512,  512    ; tree 2
+    set_array_n4 tex_pos,  3, 1536,    0,  512,  512    ; tree 3
+    set_array_n4 tex_pos,  4,    0,  512,  512,  512    ; arrow R to L
+    set_array_n4 tex_pos,  5,  512,  512,  512,  512    ; arrow L to R
+    set_array_n4 tex_pos,  6,    0, 1024,  512,  128    ; grass
+    set_array_n4 tex_pos,  7, 1024,  512, 1024,  512    ; beam
+    set_array_n4 tex_pos,  8,  512, 1024,  256,  512    ; scooter
+    set_array_n4 tex_pos,  9,    0, 1536,  512,  512    ; car 0
+    set_array_n4 tex_pos, 10,  512, 1536,  512,  512    ; car 1
+    set_array_n4 tex_pos, 11, 1024, 1536,  512,  512    ; car 2
+    set_array_n4 tex_pos, 12, 1024, 1024,  512,  512    ; house 0 L
+    set_array_n4 tex_pos, 13, 1536, 1024,  512,  512    ; house 0 R
+    set_array_n4 tex_pos, 14,    0, 2048,  512,  512    ; house 1 L
+    set_array_n4 tex_pos, 15,  512, 2048,  512,  512    ; house 1 R
+    set_array_n4 tex_pos, 16, 1024, 2048,  512,  256    ; house 2 L
+    set_array_n4 tex_pos, 17, 1024, 2304,  512,  256    ; house 2 R
+    set_array_n4 tex_pos, 18,    0, 2560,  512,  512    ; slope L
+    set_array_n4 tex_pos, 19,  512, 2560,  512,  512    ; slope R
+    set_array_n4 tex_pos, 20, 1024, 2560, 1024,  256    ; wall 0
+    
+    ; ビルボード番号からスプライト番号への変換用
+    #define set_array_n3(%1, %2, %3, %4, %5) \
+        %1(%2, 0) = %3 :\
+        %1(%2, 1) = %4 :\
+        %1(%2, 2) = %5
+        
+    ddim b2s_tbl, 22, 3
+    
+    ; set_array_n3 配列変数名, index, sprite No, sprite w, sprite h
+    set_array_n3 b2s_tbl,  0,  0.0,    0.0,   0.0   ; None
+    set_array_n3 b2s_tbl,  1,  0.0,  450.0, 450.0   ; tree 0
+    set_array_n3 b2s_tbl,  2,  1.0,  450.0, 450.0   ; tree 1
+    set_array_n3 b2s_tbl,  3,  2.0,  450.0, 450.0   ; tree 2
+    set_array_n3 b2s_tbl,  4,  3.0,  450.0, 450.0   ; tree 3
+    set_array_n3 b2s_tbl,  5,  4.0,  200.0, 200.0   ; arrow sign R to L
+    set_array_n3 b2s_tbl,  6,  5.0,  200.0, 200.0   ; arrow sign L to R
+    set_array_n3 b2s_tbl,  7,  6.0,  200.0,  50.0   ; grass
+    set_array_n3 b2s_tbl,  8,  7.0, 1000.0, 500.0   ; beam
+    set_array_n3 b2s_tbl,  9,  8.0,   35.0,  70.0   ; scooter
+    set_array_n3 b2s_tbl, 10,  9.0,  100.0, 100.0   ; car 0
+    set_array_n3 b2s_tbl, 11, 10.0,  100.0, 100.0   ; car 1
+    set_array_n3 b2s_tbl, 12, 11.0,  100.0, 100.0   ; car 2
+    set_array_n3 b2s_tbl, 13, 12.0,  500.0, 500.0   ; house 0 L
+    set_array_n3 b2s_tbl, 14, 13.0,  500.0, 500.0   ; house 0 R
+    set_array_n3 b2s_tbl, 15, 14.0,  500.0, 500.0   ; house 1 L
+    set_array_n3 b2s_tbl, 16, 15.0,  500.0, 500.0   ; house 1 R
+    set_array_n3 b2s_tbl, 17, 16.0,  600.0, 300.0   ; house 2 L
+    set_array_n3 b2s_tbl, 18, 17.0,  600.0, 300.0   ; house 2 R
+    set_array_n3 b2s_tbl, 19, 18.0,  500.0, 500.0   ; slope L
+    set_array_n3 b2s_tbl, 20, 19.0,  500.0, 500.0   ; slope R
+    set_array_n3 b2s_tbl, 21, 20.0, 2800.0, 700.0   ; wall 0
+
+    ; ----------------------------------------
+    ; コースデータ(セグメント)の初期化
+    
+    ; ビルボード(billboard) 種類定義
+    #enum BB_TREE = 1
+    #enum BB_ARROWR
+    #enum BB_ARROWL
+    #enum BB_GRASS
+    #enum BB_BEAM
+    #enum BB_HOUSE
+    #enum BB_SLOPEL
+    #enum BB_SLOPER
+
+    ; セグメント作成用データインデックス値定義
+    #enum SEGM_COUNT = 0    ; セグメント展開数
+    #enum SEGM_CURVE        ; セグメントカーブ量
+    #enum SEGM_PITCH        ; セグメントピッチ量
+    #enum SEGM_BILLBOARD    ; セグメントビルボード種類
+    
+    ; セグメント作成用データ初期化用マクロ
+    #define set_array_seg(%1, %2, %3, %4, %5, %6) \
+        %1(%2, 0) = double(%3) :\
+        %1(%2, 1) = %4 :\
+        %1(%2, 2) = %5 :\
+        %1(%2, 3) = double(%6)
+
+    ; 参照セグメントデータインデックス値定義
+    #enum SEG_Z0 = 0            ; セグメントz値
+    #enum SEG_CURVE             ; セグメントカーブ量
+    #enum SEG_PITCH             ; セグメントピッチ量
+    #enum SEG_SPRKIND           ; スプライト種類
+    #enum SEG_SPRX              ; スプライト横ずれ量
+    #enum SEG_SPRSCALE          ; スプライト拡大縮小率
+    #enum SEG_PX0               ; 表示用x0 (2D)
+    #enum SEG_PY0               ; 表示用y0 (2D)
+    #enum SEG_PZ0               ; 表示用z0 
+    #enum SEG_PCX0              ; 表示用cx0 (2D)
+    #enum SEG_CX                ; x方向にずらす量(3D)
+    #enum SEG_CY                ; x方向にずらす量(3D)
+    #enum SEG_CARS              ; 車を表示するかしないか(1bit=1台)
+
+    ; ----------------------------------------
+    ; 車用ワークインデックス値を定義
+    #enum CAR_KIND = 0      ; 車の種類
+    #enum CAR_X             ; x座標
+    #enum CAR_Y             ; y座標
+    #enum CAR_Z             ; z座標
+    #enum CAR_SPRKIND       ; ビルボード種類
+    
+    fps_change = 0
+    vscr_change = 0
+    
+    gosub *set_framerate
+    
+    time_start = d3timer()
+    
+    step = 0
+    fade_v = 0
+
+; ----------------------------------------
+*mainloop
+    
+    spd_max_m = spd_max * 0.4
+    
+    switch step
+    case 0
+        ; start. init work
+        ; gosub *init_course_0     ; セグメント作成用データを用意
+        gosub *init_course_random  ; セグメント作成用データを用意
+        gosub *count_total_seg  ; セグメント総数、セグメント全体長を取得
+        gosub *expand_segment   ; 参照セグメントデータに展開
+        seg_distance = 160      ; 画面に描画するセグメントの個数
+        gosub *init_cars_work   ; 車用ワーク初期化
+        gosub *init_work        ; ワーク初期化
+        
+        fade_v = 256
+        step++
+    case 1
+        ; fadein
+        fade_v -= int(256.0 / (framerate * 1.3))
+        if fade_v <= 0 {
+            fade_v = 0
+            step++
+        }
+        spd += spda
+        if spd >= spd_max_m : spd = spd_max_m
+        swbreak
+    case 2
+        ; main job
+        if laps >= LAPS_LIMIT : step++
+        swbreak
+    case 3
+        ; fadeout start
+        fade_v = 0
+        step++
+    case 4
+        ; fadeout
+        fade_v += int(256.0 / (framerate * 2.0))
+        if fade_v >= 256 {
+            fade_v = 256
+            laps = 0
+            step = 0
+        }
+        swbreak
+    swend
+    
+    tm = d3timer() - time_start
+    fps = d3getfps()
+
+    ; ----------------------------------------
+    ; key scan
+    
+    #define KEY_ESC     128
+    #define KEY_LEFT    1
+    #define KEY_UP      2
+    #define KEY_RIGHT   4
+    #define KEY_DOWN    8
+    #define KEY_Z       $00800
+    #define KEY_X       $01000
+    #define KEY_C       $02000
+    #define KEY_A       $04000
+    #define KEY_PRESS   (KEY_ESC+KEY_UP+KEY_DOWN+KEY_LEFT+KEY_RIGHT)
+    
+    stick k, KEY_PRESS
+
+    ; ESC key to exit
+    if k & KEY_ESC : goto *jobend
+
+    ; 仮想画面サイズを変更
+    if k & KEY_Z {
+        if vscr_change == 0 {
+            vscr_change = 1
+            vscr_size_idx = (vscr_size_idx + 1) \ length(vscr_size)
+            dispw = vscr_size(vscr_size_idx, 0)
+            disph = vscr_size(vscr_size_idx, 1)
+            dist = double(dispw / 2) / tan(deg2rad(FOV / 2))
+        }
+    } else {
+        vscr_change = 0
+    }
+    
+    ; フレームレート変更
+    if k & KEY_X {
+        if fps_change == 0 {
+            fps_change = 1
+            oldspdper = spd / spd_max
+            framerate_idx = (framerate_idx + 1) \ length(framerate_list)
+            gosub *set_framerate
+            spd = spd_max * oldspdper
+        }
+    } else {
+        fps_change = 0
+    }
+    
+    ; スプライト描画時のgzoomとgrotateの切り替え
+    if k & KEY_C {
+        zoom_kind = (zoom_kind + 1) \ 3
+    }
+    
+    ; FPS表示非表示の切り替え
+    if k & KEY_A {
+        fps_disp_enable = (fps_disp_enable + 1) \ 2
+    }
+    
+    gosub *set_framerate
+    
+    ; check cursor key
+    if k & KEY_UP {
+        spd += spda
+        if spd >= spd_max : spd = spd_max
+    }
+    if k & KEY_DOWN {
+        spd -= (spda * 3)
+        if spd < 0.0 : spd = 0.0
+    }
+    x_spd = 100.0 / double(framerate)
+    if k & KEY_LEFT : ppx += x_spd
+    if k & KEY_RIGHT : ppx -= x_spd
+    
+    px = ppx
+    angle += (spd * 1.00)
+
+    base_y = int(double(disph) * 0.5)
+    h = disph - base_y
+
+    ; カメラが居るセグメントのインデックスを取得
+    if camera_z == 0.0 {
+        seg_index = 0
+    } else {
+        ; "\"はHSPの剰余記号。一般的なプログラミング言語なら "%" に相当
+        seg_index = int(camera_z / seg_length) \ seg_max
+    }
+    
+    ; カメラが居るセグメントのカーブ量とピッチ量を取得
+    curve = seg(seg_index, SEG_CURVE)
+    pitch = seg(seg_index, SEG_PITCH)
+    
+    ; カメラがセグメント内のどの位置に居るか割合を求める
+    z0 = seg(seg_index, SEG_Z0)
+    z1 = z0 + seg_length
+    ccz = camera_z \ seg_total_length
+    camz = (ccz - z0) / seg_length
+
+    ; セグメント内のカメラ位置に応じて事前に横方向にある程度ずらしておく
+    camang = camz * curve
+    xd = -camang
+    yd = -camz * pitch
+    zd = seg_length
+    
+    cx = -(xd * camz)
+    cy = -(yd * camz)
+    cz = 0.0
+    
+    ; BGのスクロール量を変更
+    gosub *update_bg_pos
+
+    ; 道路を描画するためのデータを計算
+    gosub *update_road
+
+    ; set player position
+    gosub *update_cars
+    
+    ; 描画開始 / draw start
+    redraw 0
+    gsel vscrbufid
+    
+    ; 背景(遠景)を描画 / draw BG
+    if SEG_DELIMITER <= 1 {
+        bgid = bgimgid(vscr_size_idx)
+        bw = bgw(vscr_size_idx)
+        bh = bgh(vscr_size_idx)
+        draw_bg vscrbufid, bg_x, bg_y, bgid, bw, bh, dispw, disph
+    } else {
+        gmode gmode_gdi
+        color 0, 0, 0
+        boxf 0, 0, dispw, disph
+    }
+
+    ; 道路、ビルボード、車を描画 / draw road
+    gosub *draw_road
+    
+    ; fadein, fadeout
+    if fade_v != 0 {
+        gsel vscrbufid
+        gmode gmode_alpha, dispw, disph, fade_v
+        pos 0, 0
+        gcopy fadeid, 0, 0, dispw, disph
+        gmode gmode_gdi
+    }
+    
+    ; 仮想画面を実画面に転送
+    gosub *draw_window_from_vscreen
+
+*draw_text
+    if fps_disp_enable {
+        gsel MAIN_WDW_ID
+        font "Tahoma", 18, 1, 3
+        color 1, 1, 1
+        objcolor 255, 255, 255
+        pos (screen_w / 2) - 80, 2
+        mes "[" + dispw + "x" + disph + "] " + fps + "/" + int(framerate) + "FPS  zoom:" + zoom_kind , 4
+    }
+
+    redraw 1    ; 描画終了 / draw end
+    
+    camera_z += spd
+    if camera_z >= seg_total_length {
+        camera_z -= seg_total_length
+        laps++
+    }
+    
+    await (1000 / int(framerate))
+    goto *mainloop
+
+*set_framerate
+    ; フレームレートと最高速度を設定
+    
+    framerate = double(framerate_list(framerate_idx))
+    spd_max = 960.0 / framerate
+    spda = spd_max / (framerate * 3.0)
+    if spd > spd_max : spd = spd_max
+    if spd < 0.0 : spd = 0.0
+    return
+
+*draw_window_from_vscreen
+    ; 仮想画面を実画面に転送
+    ;
+    ; dispw, disph : 仮想画面サイズ
+    ; screen_w, screen_h : 実画面サイズ
+    ; vscrbufid : 仮想画面イメージバッファID
+    
+    gsel MAIN_WDW_ID
+    redraw 0
+    
+    if screen_w == dispw and screen_h == disph {
+        ; 等倍で転送
+        gmode gmode_gdi
+        pos 0, 0
+        gcopy vscrbufid, 0, 0, dispw, disph
+    } else {
+        ; 拡大縮小して転送
+        xscale = double(screen_w) / double(dispw)
+        yscale = double(screen_h) / double(disph)
+        
+        ; if xscale < yscale : scale = xscale : else : scale = yscale
+        if xscale < yscale {
+            scale = yscale
+        } else {
+            scale = xscale
+        }
+        
+        dstw = int(double(dispw) * scale) + 1
+        dsth = int(double(disph) * scale) + 1
+        dstx = (screen_w - dstw) / 2
+        dsty = (screen_h - dsth) / 2
+        if 0 {
+            gmode gmode_gdi
+            pos dstx, dsty
+            gzoom dstw, dsth, vscrbufid, 0, 0, dispw, disph, 0
+        } else {
+            ; grotate は gzoom より速いと聞いて使ってみたが
+            ; ここで使ってもさほど違いはなかった
+            gmode gmode_gdi, dispw, disph
+            pos (screen_w / 2), (screen_h / 2)
+            grotate vscrbufid, 0, 0, 0, dstw, dsth
+        }
+    }
+    return
+
+*draw_raster_road
+    ; 道路を1ラスター分描画 / draw road 1 raster
+    ; draw_x, draw_y : draw x, y
+    ; road_w : road width
+    ; kind : 0 or 1 or 2
+    ; dispw : screen width
+
+    ; draw ground
+    if kind = 0 {
+        ; color R, G, B
+        color 114, 185, 66
+    } else {
+        color 22, 174, 63
+    }
+    ; boxf x0, y0, x1, y1
+    boxf 0, draw_y, dispw, draw_y
+
+    ; draw road base
+    switch kind
+    case 0
+        color 133, 149, 158
+        swbreak
+    case 1
+        color 149, 168, 179
+        swbreak
+    case 2
+        color 255, 0, 0
+        swbreak
+    swend
+    boxf draw_x, draw_y, draw_x + road_w, draw_y
+
+    ; draw white line
+    lw = double(road_w) * 48.0 / 2048.0     ; white line width
+
+    switch kind
+    case 0
+        color 255, 255, 255
+        
+        lx = double(draw_x)
+        boxf lx, draw_y, lx + lw, draw_y
+        
+        lx = lx + road_w - lw
+        boxf lx, draw_y, lx + lw, draw_y
+        
+        lx = double(draw_x) + double(road_w) * 0.25 - (lw * 0.5)
+        boxf lx, draw_y, lx + lw, draw_y
+        
+        lx = double(draw_x) + double(road_w) * 0.75 - (lw * 0.5)
+        boxf lx, draw_y, lx + lw, draw_y
+        swbreak
+    case 1
+        color 228, 236, 252
+        
+        lx = double(draw_x) + lw
+        boxf lx, draw_y, lx + lw, draw_y
+        
+        lx = double(draw_x) + road_w - (lw * 2)
+        boxf lx, draw_y, lx + lw, draw_y
+
+        swbreak
+    swend
+
+    ; draw orange line
+    color 255, 204, 96
+    lx = double(draw_x) + (double(road_w) * 0.5) - (lw * 0.5)
+    boxf lx, draw_y, lx + lw, draw_y
+    
+    return
+
+*get_easing_value
+    ; イージングを考慮した値を返す
+    ;
+    ; easing : easing kind. 0 - 3
+    ; v0 : value 0
+    ; v1 : value 1
+    ; per : percent. 0.0 - 1.0
+    ; return ret_value
+    
+    if 1 {
+        ; HSP のイージング関数を使って処理
+        switch easing
+        case 0:
+            ; not easing
+            ret_value = v0
+            swbreak
+        case 1:
+            ; ease In
+            setease v0, v1, ease_quad_in
+            ret_value = geteasef(int(per * 4096), 4096)
+            swbreak
+        case 2:
+            ; ease Out
+            setease v0, v1, ease_quad_out
+            ret_value = geteasef(int(per * 4096), 4096)
+            swbreak
+        case 3:
+            setease v0, v1, ease_quad_inout
+            ret_value = geteasef(int(per * 4096), 4096)
+            swbreak
+        swend
+    } else {
+        ; 自前でイージング計算
+        v_diff = double(v1 - v0)
+        switch easing
+        case 0:
+            ; not easing
+            ret_value = v0
+            swbreak
+        case 1:
+            ; ease In
+            ret_value = v0 + (v_diff * (per * per))
+            swbreak
+        case 2:
+            ; ease Out
+            ret_value = v0 + (v_diff * (1.0 - ((1.0 - per) * (1.0 - per))))
+            swbreak
+        case 3:
+            if per < 0.5 {
+                ret_value = v0 + (v_diff * (2.0 * per * per))
+            } else {
+                vv = -2.0 * per + 2.0
+                ret_value = v0 + (v_diff * (1.0 - ((vv * vv) / 2.0)))
+            }
+            swbreak
+        swend
+    }
+    return
+
+
+*set_billboard
+    ; 各セグメントに記録するビルボード情報を決める
+    ;
+    ; billboard : ビルボード種類
+    ; road_x : 道路の幅(片側の幅)
+    ; j : counter
+    ;
+    ; return spr_kind, spr_x, spr_scale
+    switch billboard
+    case 0
+        ; none
+        spr_kind = 0
+        spr_x = 0.0
+        spr_scale = 1.0
+        swbreak
+    case BB_TREE
+        ; tree
+        spr_kind = rnd(4) + 1
+        spr_x = rnd(400) + road_x + 100
+        if (rnd(2) & 1) == 0 : spr_x *= -1
+        spr_scale = double(100 + rnd(100)) * 0.01
+        swbreak
+    case BB_ARROWR
+    case BB_ARROWL
+        ; arrow sign right to left, left to right
+        if j \ 4 == 0 {
+            ; arrow sign
+            spr_kind = 5 + (billboard - BB_ARROWR)
+            spr_x = road_x + 120
+            if billboard == 3 : spr_x *= -1
+            spr_scale = 1.0
+        } else {
+            ; grass
+            spr_kind = 7
+            spr_x = rnd(50) + road_x + 120
+            if billboard == 3 : spr_x *= -1
+            spr_scale = 1.0
+        }
+        swbreak
+    case BB_GRASS
+        ; grass
+        spr_kind = 7
+        spr_x = road_x + 200 + rnd(150)
+        if (rnd(2) & 1) == 0 : spr_x *= -1
+        spr_scale = double(150 + rnd(50)) * 0.01
+        swbreak
+    case BB_BEAM
+        ; beam
+        if j \ 7 = 0 {
+            ; beam
+            spr_kind = 8
+            spr_x = 0
+            spr_scale = 1.0
+        } else {
+            ; none
+            spr_kind = 0
+            spr_x = 0
+            spr_scale = 1.0
+        }
+        swbreak
+    case BB_HOUSE
+        ; house
+        if (j \ 12) == 4 {
+            spr_x = -(road_x + 400 + rnd(100))
+            spr_scale = 1.0
+            if (rnd(2) & 1) == 0 {
+                ; house L
+                spr_kind = 13
+            } else {
+                ; house R
+                spr_kind = 14
+                spr_x *= -1
+            }
+            spr_kind += (rnd(3) * 2)
+            ; if (rnd(2) & 1) != 0 : spr_kind += 2
+        } else {
+            if j \ 2 == 0 {
+                ; tree
+                spr_kind = rnd(4) + 1
+                spr_x = rnd(600) + road_x + 300
+                if (rnd(2) & 1) == 0 : spr_x *= -1
+                spr_scale = double(100 + rnd(100)) * 0.01
+            } else {
+                ; none
+                spr_kind = 0
+                spr_x = 0
+                spr_scale = 1.0
+            }
+        }
+        swbreak
+    case BB_SLOPEL
+        ; slope L
+        if j == 0 {
+            spr_kind = 21
+            spr_x = -(road_x * 6.0)
+            spr_scale = 1.0
+        } else {
+            if j \ 2 == 0 {
+                ; slope L
+                spr_kind = 19
+                spr_x = -(road_x * 1.5)
+                spr_scale = 1.0
+            } else {
+                ; tree
+                spr_kind = rnd(4) + 1
+                spr_x = rnd(600) + road_x + 300
+                spr_scale = double(100 + rnd(100)) * 0.01
+            }
+        }
+        swbreak
+    case BB_SLOPER
+        ; slope R
+        if j == 0 {
+            spr_kind = 21
+            spr_x = (road_x * 6.0)
+            spr_scale = 1.0
+        } else {
+            if j \ 2 == 0 {
+                ; slope R
+                spr_kind = 20
+                spr_x = (road_x * 1.5)
+                spr_scale = 1.0
+            } else {
+                ; tree
+                spr_kind = rnd(4) + 1
+                spr_x = (rnd(600) + road_x + 300) * -1.0
+                spr_scale = double(100 + rnd(100)) * 0.01
+            }
+        }
+        swbreak
+    swend
+    return
+
+*update_cars
+    ; 車の座標値を更新
+    
+    repeat 4
+        switch cnt
+        case 0
+            ; player
+            cars(cnt, CAR_SPRKIND) = double(9)
+            d = 140.0
+            rx = road_x * 0.5
+            if 1 {
+                cars(cnt, CAR_X) = -rx * 1.5 + (rx * 0.25) * sin(deg2rad(angle * 0.07))
+                cars(cnt, CAR_Y) = 0.0
+                cars(cnt, CAR_Z) = camera_z + d + 30.0 * sin(deg2rad(angle * 0.1))
+            } else {
+                cars(cnt, CAR_X) = -rx * 1.5
+                cars(cnt, CAR_Y) = 0.0
+                cars(cnt, CAR_Z) = camera_z + d
+            }
+            swbreak
+        case 1
+            cars(cnt, CAR_SPRKIND) = double(10)
+            d = 400.0
+            cars(cnt, CAR_X) = -road_x * 0.25
+            cars(cnt, CAR_Y) = 0.0
+            ; cars(cnt, CAR_Z) = (cars(cnt, CAR_Z) + spd + 2.0) \ seg_total_length
+            cars(cnt, CAR_Z) = camera_z + d + 270.0 * sin(deg2rad(angle * 0.03))
+            swbreak
+        case 2
+            cars(cnt, CAR_SPRKIND) = double(11)
+            cars(cnt, CAR_X) = road_x * 0.25
+            cars(cnt, CAR_Y) = 0.0
+            cars(cnt, CAR_Z) -= (spd_max * 0.25)
+            if cars(cnt, CAR_Z) < 0.0 : cars(cnt, CAR_Z) += seg_total_length
+            swbreak
+        case 3
+            cars(cnt, CAR_SPRKIND) = double(12)
+            cars(cnt, CAR_X) = road_x * 0.7
+            cars(cnt, CAR_Y) = 0.0
+            cars(cnt, CAR_Z) -= (spd_max * 0.2)
+            if cars(cnt, CAR_Z) < 0.0 : cars(cnt, CAR_Z) += seg_total_length
+            swbreak
+        swend
+
+        ; セグメントに描画フラグを設定
+        i = int(cars(cnt, CAR_Z) / seg_length) \ seg_max
+        if i < 0 : i += seg_max
+        seg(i, SEG_CARS) = double(int(seg(i, SEG_CARS)) | (1 << cnt))
+    loop
+
+    return
+
+*draw_car
+    ; draw car
+    ;
+    ; i : segment index
+
+    fg = int(seg(i, SEG_CARS))
+    if fg == 0 : return
+    
+    repeat 4
+        if fg & (1 << cnt) == 0 : continue
+        
+        carz = cars(cnt, CAR_Z) \ seg_total_length
+        sz0 = seg(i, SEG_Z0)
+        if carz < sz0 or (sz0 + seg_length) < carz : continue
+        
+        carx = cars(cnt, CAR_X)
+        cary = cars(cnt, CAR_Y)
+        spr_kind = int(cars(cnt, CAR_SPRKIND))
+        spr_scale = 1.0
+        
+        i2 = (i + 1) \ seg_max
+        rcx0 = seg(i, SEG_CX)
+        rcx1 = seg(i2, SEG_CX)
+        rcy0 = seg(i, SEG_CY)
+        rcy1 = seg(i2, SEG_CY)
+        
+        p = (carz - sz0) / seg_length
+        rcx = rcx0 + (rcx1 - rcx0) * p
+        rcy = rcy0 + (rcy1 - rcy0) * p
+        rcz = camera_z \ seg_total_length
+        z0 = sz0 - rcz
+        if z0 < 0 : z0 += seg_total_length
+        z0 += (seg_length * p)
+        if z0 == 0.0 : z0 = 0.1
+        y0 = (road_y + rcy + cary) * dist / z0
+        cx0 = (rcx + px) * dist / z0
+        spr_x = carx
+        
+        gosub *draw_billboard
+    loop
+    
+    return
+
+*draw_billboard
+    ; draw billboard sprite
+    ;
+    ; spr_kind : kind. 0 = None, 1-4 = tree, 5-6 = sign
+    ; spr_x : x position
+    ; spr_scale : scale (double)
+    ; z0 : segment z value.
+    ; y0 : segment y value. (2D)
+    ; cx0 : segment center x value. (2D)
+    ; dispw, disph : screen size
+    ; dist : screen distance
+    ; vscrbufid : virtual image buffer ID
+    ; tmpid : temporary image buffer ID
+    ; tex_pos : array. texture position table.
+    
+    if spr_kind <= 0 : return
+    
+    n = int(b2s_tbl(spr_kind, 0))           ; sprite No.
+    spr_w = double(b2s_tbl(spr_kind, 1))    ; sprite width
+    spr_h = double(b2s_tbl(spr_kind, 2))    ; sprite height
+    
+    imgid = sprimgid0       ; sprite image buffer ID
+    imgw = spr0w            ; sprite source width
+    imgh = spr0h            ; sprite source height
+    
+    z = z0
+    y = y0
+    cx = cx0
+    
+    scale = spr_scale * double(dist) / z
+    dst_w = int(spr_w * scale)              ; 転送先サイズ
+    dst_h = int(spr_h * scale)
+    
+    spr_xpos = (double(spr_x) * double(dist) / z) + cx
+    dst_x = int(spr_xpos - (dst_w / 2) + (dispw / 2))   ; 転送先座標
+    dst_y = int(y - dst_h + base_y)
+    
+    if z < SPR_Z_LIMIT : return
+    
+    ; gosub *draw_sprite_gzoom
+    draw_sprite_gzoom vscrbufid, dst_x, dst_y, dst_w, dst_h, imgid, n, tmpid, dispw, disph, tex_pos
+    
+    return
+
+#module
+#deffunc draw_sprite_gzoom int dstid, int dx, int dy, int dw, int dh, int srcid, int n, int tmpid, int dispw, int disph, array tex_pos
+    ; スプライト相当を拡大縮小して描画
+    ;
+    ; dstid : 描画先バッファID
+    ; dx, dy, dw, dh : 描画先左上座標、サイズ
+    ; srcid : 元画像バッファID
+    ; n : スプライトNo.
+    ; tmpid : 作業用イメージバッファID
+    ; dispw, disph : 画面サイズ
+    ; tex_pos : テクスチャ座標テーブル
+    
+    ; テクスチャの x, y, w, h を取得
+    sx = tex_pos(n, 0)
+    sy = tex_pos(n, 1)
+    sw = tex_pos(n, 2)
+    sh = tex_pos(n, 3)
+    draw_by_gzoom dstid, dx, dy, dw, dh, srcid, sx, sy, sw, sh, tmpid, dispw, disph
+    return
+#global
+
+#module
+#deffunc draw_by_gzoom int dstid, int dstx, int dsty, int dstw, int dsth, int srcid, int srcx, int srcy, int srcw, int srch, int tmpid, int dispw, int disph
+    ; 画面外にはみ出る分を考量して最小面積で画像を拡大縮小描画
+    ;
+    ; dstid : 描画先バッファID
+    ; dstx, dsty, dstw, dsth : 描画先左上座標, 描画先サイズ
+    ; srcid : 元画像バッファID
+    ; srcx, srcy, srcw, scrh : 元画像左上座標, 元画像サイズ
+    ; tmpid : 作業用イメージバッファID
+    ; dispw, disph : 画面サイズ
+    
+    dx = dstx
+    dy = dsty
+    dw = dstw
+    dh = dsth
+    sx = srcx
+    sy = srcy
+    sw = srcw
+    sh = srch
+    
+    if (dx + dw) < 0 or dispw <= dx : return
+    if (dy + dh) < 0 or disph <= dy : return
+    
+    if dx < 0 {
+        w = -dx * sw / dw
+        sx += w
+        sw -= w
+        dw += dx
+        dx = 0
+    }
+    if dy < 0 {
+        h = -dy * sh / dh
+        sy += h
+        sh -= h
+        dh += dy
+        dy = 0
+    }
+    if (dx + dw) > dispw {
+        dwd = (dx + dw) - dispw
+        swd = dwd * sw / dw
+        sw -= swd
+        dw -= dwd
+    }
+    if (dy + dh) > disph {
+        dhd = (dy + dh) - disph
+        shd = dhd * sh / dh
+        sh -= shd
+        dh -= dhd
+    }
+    
+    switch zoom_kind@
+    case 0
+        ; gzoomで処理
+        ; gzoom は透明色を扱えない(gmode設定が反映されない)ので小技が必要
+        ; 一旦、仮バッファに拡大縮小描画する
+        gsel tmpid
+        pos 0, 0
+        gzoom dw, dh, srcid, sx, sy, sw, sh, 0
+
+        ; 仮バッファから実スクリーンに gcopy で転送
+        ; gcopy なら RGB=(0,0,0) を透明色として扱える
+        gsel dstid
+        gmode gmode_rgb0    ; RGB=(0,0,0)を透明色として扱う
+        pos dx, dy
+        gcopy tmpid, 0, 0, dw, dh
+        swbreak
+    case 1
+        ; grotateで処理
+        ; grotate なら一発で透明色(RGB=(0,0,0))を扱えるので処理が速い
+        ; その代わり精度が荒くて描画結果がプルプルと震える
+        gsel dstid
+        gmode gmode_rgb0, sw, sh                    ; 転送元サイズをここで指定
+        pos dx + (dw / 2), dy + (dh / 2)            ; 中心座標を転送先座標として指定
+        grotate srcid, sx, sy, 0, dw, dh            ; 転送元座標、転送先サイズを指定
+        swbreak
+    case 2
+        ; gsquareで描画
+        ; gsquareも一発で透明色(RGB=(0,0,0))を扱えるので処理が速い
+        ; その代わりこれも精度が荒い。プルプルする
+        dim _dx, 4
+        dim _dy, 4
+        dim _sx, 4
+        dim _sy, 4
+        
+        ; 転送先座標
+        _dx(0) = dx
+        _dy(0) = dy
+        _dx(1) = dx + dw - 1
+        _dy(1) = dy
+        _dx(2) = dx + dw - 1
+        _dy(2) = dy + dh - 1
+        _dx(3) = dx
+        _dy(3) = dy + dh - 1
+        
+        ; 転送元座標
+        _sx(0) = sx
+        _sy(0) = sy
+        _sx(1) = sx + sw - 1
+        _sy(1) = sy
+        _sx(2) = sx + sw - 1
+        _sy(2) = sy + sh - 1
+        _sx(3) = sx
+        _sy(3) = sy + sh - 1
+        
+        gsel dstid
+        gmode gmode_rgb0
+        gsquare srcid, _dx, _dy, _sx, _sy
+        swbreak
+    swend
+
+    ; draw text
+    if 0 {
+        gmode gmode_gdi
+        font "Arial", 18, 1
+        color 255, 255, 255
+        pos 4, 80
+        mes "x, y = " + dstx + ", " + dsty
+        pos 4, 100
+        mes "dst x, y, w, h = " + dx + ", " + dy + " ," + dw + " ," + dh
+        pos 4, 120
+        mes "src x, y, w, h = " + sx + ", " + sy + " ," + sw + " ," + sh
+    }
+
+    return
+#global
+
+*expand_segment
+    ; 元になるセグメントデータから参照されるセグメントデータに展開
+    ;
+    ; segm : array. セグメント元データ
+    
+    ddim seg, seg_max, 13
+    
+    z = 0.0
+    i = 0
+    repeat length(segm)
+        n0 = cnt
+        n1 = (cnt + 1) \ length(segm)
+        
+        lp = int(segm(n0, SEGM_COUNT))
+        curve = segm(n0, SEGM_CURVE)
+        pitch = segm(n0, SEGM_PITCH)
+        billboard = int(segm(n0, SEGM_BILLBOARD))
+
+        next_curve = segm(n1, SEGM_CURVE)
+        next_pitch = segm(n1, SEGM_PITCH)
+        
+        ; イージング有効無効
+        #define EASING_ENABLE   0
+        
+        if EASING_ENABLE {
+            ; カーブ量やピッチ量をイージングで求める場合
+            if curve == next_curve {
+                curve_easing = 0
+            } else {
+                if curve == 0 {
+                    curve_easing = 1        ; ease In
+                } else {
+                    if next_curve == 0 {
+                        curve_easing = 2    ; ease Out
+                    } else {
+                        curve_easing = 3    ; ease In Out
+                    }
+                }
+            }
+            
+            if pitch == next_pitch {
+                pitch_easing = 0
+            } else {
+                if pitch == 0 {
+                    pitch_easing = 1        ; ease In
+                } else {
+                    if next_pitch == 0 {
+                        pitch_easing = 2    ; ease Out
+                    } else {
+                        pitch_easing = 3    ; ease In Out
+                    }
+                }
+            }
+        }
+        
+        repeat lp
+            seg(i, 0) = double(z)
+            
+            per = double(cnt) / double(lp)
+            if EASING_ENABLE {
+                ; カーブ量やピッチ量をイージングで求める
+                v0 = curve
+                v1 = next_curve
+                easing = curve_easing
+                gosub *get_easing_value
+                seg(i, 1) = double(ret_value)
+                
+                v0 = pitch
+                v1 = next_pitch
+                easing = pitch_easing
+                gosub *get_easing_value
+                seg(i, 2) = double(ret_value)
+            } else {
+                ; カーブ量やピッチ量を線形補完で求める
+                seg(i, 1) = curve + ((next_curve - curve) * per)
+                seg(i, 2) = pitch + ((next_pitch - pitch) * per)
+            }
+            
+            ; set billboard sprite
+            j = cnt
+            gosub *set_billboard
+            
+            seg(i, SEG_SPRKIND) = double(spr_kind)
+            seg(i, SEG_SPRX) = double(spr_x)
+            seg(i, SEG_SPRSCALE) = double(spr_scale)
+            
+            seg(i, SEG_PX0) = 0.0 ; 表示用x0
+            seg(i, SEG_PY0) = 0.0 ; 表示用y0
+            seg(i, SEG_PZ0) = 0.0 ; 表示用z0
+            seg(i, SEG_PCX0) = 0.0 ; 表示用cx0
+            
+            seg(i, SEG_CX) = 0.0    ; 本来の位置からずらす量 x値
+            seg(i, SEG_CY) = 0.0    ; 本来の位置からずらす量 y値
+            
+            seg(i, SEG_CARS) = 0.0 ; 車を描画するかしないか
+            
+            z += double(seg_length)
+            i++
+        loop
+    loop
+    return
+
+*update_road
+    ; 道路を描画するための座標値を計算して記録
+    
+    last_seg_index = 0
+    seg_z_max = 0.0
+    repeat seg_distance
+        ; セグメントのz値、カーブ量、ピッチ量を取得
+        j = (seg_index + cnt) \ seg_max
+        if j < 0 : j += seg_max
+        last_seg_index= j
+        
+        z0 = seg(j, SEG_Z0)
+        curve = seg(j, SEG_CURVE)
+        pitch = seg(j, SEG_PITCH)
+        
+        ; 最後のセグメントを超えて最初にループする場合、z値を調整する
+        if z0 > seg_z_max : seg_z_max = z0
+        if z0 < seg_z_max : z0 += seg_total_length
+        
+        cam_z = camera_z \ seg_total_length
+        z0 -= cam_z
+        if z0 == 0.0 : z0 = 0.1     ; 0で除算しないように微調整
+        
+        ; 画面上で描画すべきy座標位置を取得
+        dcy = road_y + cy
+        y0 = dcy * dist / double(z0)
+        
+        ; if y0 + base_y < 100 : assert
+        
+        ; 画面上でずらすべき中心線の位置を取得
+        dcx = cx + px
+        cx0 = dcx * double(dist) / double(z0)
+
+        ; 画面上で描画すべき道路の幅(片側の幅)を取得
+        x0 = double(road_x) * double(dist) / double(z0)
+
+        ; 各セグメントに描画用の値を記録
+        seg(j, SEG_PX0) = x0
+        seg(j, SEG_PY0) = y0
+        seg(j, SEG_PZ0) = z0
+        seg(j, SEG_PCX0) = cx0
+        
+        ; 本来の位置からずらす量を記録
+        seg(j, SEG_CX) = cx
+        seg(j, SEG_CY) = cy
+        
+        ; 車を描画するかしないかをクリア
+        seg(j, SEG_CARS) = 0.0
+
+        cx += xd
+        cy += yd
+        cz += zd
+        
+        xd += curve
+        yd += pitch
+    loop
+    ; logmes "1) last seg index="+last_seg_index
+    return
+
+*draw_road
+    ; 道路を描画
+
+    gmode gmode_gdi
+    
+    if SEG_DELIMITER <= 1 {
+        repeat (seg_distance - 1)
+            i = (seg_index + seg_distance - 2 - cnt) \ seg_max
+            if i < 0 : i = (i + seg_max) \ seg_max
+            i2 = (i + 1) \ seg_max
+            last_seg_index = i
+            
+            x0 = seg(i, SEG_PX0)
+            y0 = seg(i, SEG_PY0)
+            z0 = seg(i, SEG_PZ0)
+            cx0 = seg(i, SEG_PCX0)
+            
+            x1 = seg(i2, SEG_PX0)
+            y1 = seg(i2, SEG_PY0)
+            z1 = seg(i2, SEG_PZ0)
+            cx1 = seg(i2, SEG_PCX0)
+            
+            spr_kind = int(seg(i, SEG_SPRKIND))
+            spr_x = seg(i, SEG_SPRX)
+            spr_scale = seg(i, SEG_SPRSCALE)
+
+            if z1 < (SPR_Z_LIMIT / 2) : goto *seg_draw_cancel
+            
+            ; 各セグメントが作る台形を塗り潰す
+            
+            ; y0 < y1 なら道路の裏面を見てる。描画をスキップ
+            if y0 < y1 : goto *seg_draw_cancel
+            
+            h = abs(y1 - y0) + 1
+            dsy = -1
+            repeat h
+                sy = y0 + (dsy * cnt)
+                draw_y = int(sy) + base_y
+                
+                ; 画面縦幅を超えたy座標なら描画しない
+                if draw_y < 0 | draw_y > disph : continue
+                
+                ; 2次元的な計算で割合を求める
+                if y0 == y1 {
+                    p = 0.0
+                } else {
+                    p = double(sy - y0) / double(y1 - y0)
+                }
+                z = (double(z1) - double(z0)) * p + double(z0)
+                x = (double(x1) - double(x0)) * p + double(x0)
+                center_x = cx0 + ((cx1 - cx0) * p)
+                addv = ((int(z) + int(camera_z)) / 80) & $1
+                
+                ; 1ラスター分を描画 / draw 1 raster
+                road_w = x * 2
+                draw_x = -x + center_x + (dispw / 2)
+                
+                kind = addv
+                gmode gmode_gdi
+                gosub *draw_raster_road
+            loop
+            
+*seg_draw_cancel
+            ; draw billboard sprite
+            if SEG_DELIMITER <= 1 {
+                if spr_kind > 0 {
+                    if z0 == 0.0 : z0 = 0.1
+                    gosub *draw_billboard
+                }
+            }
+            
+            ; draw car
+            gosub *draw_car
+        loop
+    }
+    
+    if SEG_DELIMITER >= 1 {
+        ; デバッグ用。セグメントの区切り線を描画
+        d = (dispw / 2)
+        gmode gmode_gdi
+        repeat (seg_distance - 1)
+            i = (seg_index + seg_distance - 2 - cnt) \ seg_max
+            if i < 0 : i = (i + seg_max) \ seg_max
+            i2 = (i + 1) \ seg_max
+            last_seg_index = i
+            
+            x0 = seg(i, SEG_PX0)
+            y0 = seg(i, SEG_PY0)
+            z0 = seg(i, SEG_PZ0)
+            cx0 = seg(i, SEG_PCX0)
+            
+            x1 = seg(i2, SEG_PX0)
+            y1 = seg(i2, SEG_PY0)
+            z1 = seg(i2, SEG_PZ0)
+            cx1 = seg(i2, SEG_PCX0)
+
+            if z1 >= (SPR_Z_LIMIT / 2) {
+                ; y0 < y1 なら道路の裏面を見てる
+                if SEG_DELIMITER == 2 or y0 >= y1 {
+                    ; セグメントの区切り(赤)を描画
+                    color 255, 0, 0
+                    line cx0 + x0 + d, y0 + base_y, cx0 - x0 + d, y0 + base_y
+                    if 0 {
+                        line cx1 - x1 + d, y1 + base_y, cx0 - x0 + d, y0 + base_y
+                        line cx1 + x1 + d, y1 + base_y, cx0 + x0 + d, y0 + base_y
+                    }
+                    
+                    ; 中心線(黄色)を描画
+                    color 255, 255, 0
+                    line cx1 + d, y1 + base_y, cx0 + d, y0 + base_y
+                    
+                    if 0 {
+                        font "Arial", 9, 1, 1
+                        color 255, 255, 255
+                        objcolor 1, 1, 1
+                        pos cx0 + (x0 / 4) + d, y0 + base_y - 11
+                        mes "i=" + i, 4
+                    }
+                }
+            }
+        loop
+    }
+    
+    ; logmes "2) last seg index="+last_seg_index
+    return
+
+; ----------------------------------------
+*init_bg
+    ; load bg
+    buffer BGID_START, 2560, 1440
+    picload BG0_FILE
+    real_bgw = ginfo_winx
+    real_bgh = ginfo_winy
+    
+    k = length(vscr_size)
+    dim bgimgid, k
+    dim bgw, k
+    dim bgh, k
+    
+    ; scaling
+    repeat k
+        bgw(cnt) = vscr_size(cnt, 0) * 2
+        bgh(cnt) = vscr_size(cnt, 1) * 2
+        bgimgid(cnt) = BGID_START + 1 + cnt
+        buffer bgimgid(cnt), bgw(cnt), bgh(cnt)
+        gsel bgimgid(cnt)
+        gmode gmode_gdi
+        if bgw(cnt) == real_bgw and bgh(cnt) == real_bgh {
+            gcopy BGID_START, 0, 0, real_bgw, real_bgh
+        } else {
+            gzoom bgw(cnt), bgh(cnt), BGID_START, 0, 0, real_bgw, real_bgh, 1
+        }
+    loop
+    return
+
+*update_bg_pos
+    ; BGスクロール位置を計算
+    ; curve, pitch
+    ; spd, spd_max
+    ; bg_x, bg_y
+    
+    fper = 30.0 / framerate
+    bg_x += curve * (spd / spd_max) * 0.1 * fper
+    if spd > 0.0 {
+        if pitch != 0.0 {
+            bg_y += pitch * (spd / spd_max) * 0.1 * fper
+        } else {
+            d = (spd / spd_max) * 0.2 * fper
+            if bg_y < 0.0 {
+                bg_y += (d * 0.1)
+                if bg_y >= 0.0 : bg_y = 0.0
+            }
+            if bg_y > 0.0 {
+                bg_y -= (d * 0.1)
+                if bg_y <= 0.0 : bg_y = 0.0
+            }
+        }
+        
+        ; bg_y += ((pitch * 2.0) - bg_y) * 0.15
+        
+        if bg_y < -1.0 : bg_y = -1.0
+        if bg_y > 1.0 : bg_y = 1.0
+    }
+    return
+
+#module
+#deffunc draw_bg int dstid, double bg_x, double bg_y, int bgimgid, int bgw, int bgh, int dispw, int disph
+    ; BGを描画 / draw BG
+    ;
+    ; dstid : 描画先バッファID
+    ; bg_x, bg_y : bg position. 0.0 - 1.0
+    ; bgimgid : bg images buffer ID. array.
+    ; bgw, bgh : bg width, height. array.
+    ; dispw, disph : screen width, height
+    
+    bx = bg_x
+    by = bg_y
+    if by < -1.0 : by = -1.0
+    if by > 1.0 : by = 1.0
+    
+    bgid = bgimgid
+    bw = bgw
+    bh = bgh
+    shiftx = bx
+    
+    sx = int(double(bh / 4) * bx) \ bw
+    sy = int(double(bh / 4) * by) + (bh / 2) - (bh / 4)
+    sw = dispw
+    sh = disph
+
+    gsel dstid
+    gmode gmode_gdi
+    
+    if sx >= 0 and (sx + dispw) < bw {
+        pos 0, 0
+        gcopy bgid, sx, sy, dispw, disph
+    } else {
+        if (sx + dispw) > bw : sx = (sx - bw) \ bw
+        w = -sx
+        sw0 = w
+        sx0 = bw - w
+        pos 0, 0
+        gcopy bgid, sx0, sy, sw0, sh
+        
+        sw1 = sw - w
+        sx1 = 0
+        pos sw0, 0
+        gcopy bgid, sx1, sy, sw1, sh
+    }
+    return
+#global
+
+; ----------------------------------------
+*init_work
+    ; ワーク初期化
+    
+    camera_z = 0.0
+    spd = 0.0
+    
+    xd = 0.0
+    yd = 0.0
+    zd = seg_length
+    
+    bg_x = 0.0
+    bg_y = 0.0
+    
+    if 1 {
+        ; left
+        ppx = double(road_x) * 0.5
+    } else {
+        ; center
+        ppx = 0.0
+    }
+    px = 0.0
+    angle = 0.0
+    fps = 0
+    laps = 0
+    
+    return
+
+*init_cars_work
+    ; 車用ワーク初期化
+    
+    ddim cars, 4, 5
+    repeat 4
+        cars(cnt, CAR_KIND) = double(cnt)
+        cars(cnt, CAR_X) = 0.0
+        cars(cnt, CAR_Y) = 0.0
+        cars(cnt, CAR_Z) = 0.0
+        cars(cnt, CAR_SPRKIND) = 9.0
+    loop
+    return
+
+; ----------------------------------------
+*count_total_seg
+    ; セグメント総数をカウント、セグメント全体の長さを取得
+    ;
+    ; segm : セグメント作成用データ配列
+    ;
+    ; return : seg_max, seg_total_length
+    
+    ; セグメント総数を取得
+    seg_max = 0
+    repeat length(segm)
+        seg_max += int(segm(cnt, 0))
+    loop
+    
+    ; セグメントのz幅を指定
+    seg_length = 20.0
+    seg_total_length = seg_length * double(seg_max)
+    
+    return
+    
+; ----------------------------------------
+*init_course_0
+    ; コースデータの初期化
+    
+    ; init road y, road half width
+    road_y = 100.0      ; 道路のy位置
+    road_x = 300.0      ; 道路の幅(片側の幅)
+    
+    ; セグメント作成用データ
+    ; set_array_n4 配列変数名, index, count, curve, pitch, billboard
+    ; HSPは int と double を配列内で混在できない…
+    ddim segm, 32, 4
+    set_array_seg segm,  0, 25,    0.0,    0.0, 0
+    set_array_seg segm,  1, 28,    0.0,    0.0, BB_BEAM
+    set_array_seg segm,  2, 20,    0.0,    0.0, BB_TREE
+    set_array_seg segm,  3, 70,    0.0,    0.0, BB_SLOPEL
+    set_array_seg segm,  4, 30,    0.0,    0.0, BB_TREE
+    set_array_seg segm,  5, 70,   -0.8,    0.0, BB_SLOPER
+    set_array_seg segm,  6, 30,    0.0,    0.0, BB_TREE
+    set_array_seg segm,  7, 70,    0.0,    0.0, BB_HOUSE
+    set_array_seg segm,  8, 30,    0.0,    0.0, BB_GRASS
+    set_array_seg segm,  9, 20,    0.0,    0.0, BB_ARROWL
+    set_array_seg segm, 10, 80,    2.0,    0.0, BB_TREE
+    set_array_seg segm, 11, 10,    0.0,    0.0, BB_TREE
+    set_array_seg segm, 12, 80,    0.0,   -0.5, BB_GRASS
+    set_array_seg segm, 13, 20,    0.0,    0.0, BB_ARROWR
+    set_array_seg segm, 14, 10,   -1.0,    0.0, BB_GRASS
+    set_array_seg segm, 15, 50,   -4.0,    0.0, BB_TREE
+    set_array_seg segm, 16, 20,    0.0,    0.0, 0
+    set_array_seg segm, 17, 50,    0.0,    1.0, BB_GRASS
+    set_array_seg segm, 18, 40,    0.0,   -1.0, BB_TREE
+    set_array_seg segm, 19, 60,   -0.5,    0.0, BB_TREE
+    set_array_seg segm, 20, 50,    0.0,    0.0, BB_GRASS
+    set_array_seg segm, 21, 80,    0.0,    0.0, BB_HOUSE
+    set_array_seg segm, 22, 20,    0.0,    0.0, BB_ARROWL
+    set_array_seg segm, 23, 20,    2.0,    0.0, 0
+    set_array_seg segm, 24, 30,    0.0,    0.0, BB_GRASS
+    set_array_seg segm, 25, 40,   -0.8,   -0.8, BB_TREE
+    set_array_seg segm, 26, 20,    0.0,    0.8, 0
+    set_array_seg segm, 27, 20,    0.0,    0.0, BB_GRASS
+    set_array_seg segm, 28, 40,    0.2,   -0.6, BB_TREE
+    set_array_seg segm, 29, 20,    0.0,    0.6, BB_GRASS
+    set_array_seg segm, 30, 50,    0.0,    0.0, BB_GRASS
+    set_array_seg segm, 31, 50,    0.0,    0.0, BB_TREE
+    
+    return
+
+; ----------------------------------------
+*init_course_random
+    ; コースデータを乱数で初期化
+    
+    ; init road y, road half width
+    road_y = 100.0      ; 道路のy位置
+    road_x = 300.0      ; 道路の幅(片側の幅)
+    
+    ; 各ビルボード種類の発生確率
+    ; 種類は、NONE, TREE, GRASS, HOUSE, SLOPEL, SLOPER の6種類
+    dim rlist, 6
+    rlist = 10, 50, 60, 80, 90, 100
+    
+    segm_max = 50 + rnd(25)
+    
+    ; 二次元配列に、count, curve, pitch, billboard を設定していく
+    ; HSPは配列の要素数を動的に増やせないらしいので、
+    ; 一旦仮配列に設定してから、後で本番用の配列に必要な分だけコピーする
+    ddim tsegm, segm_max * 4, 4
+    idx = 0
+    repeat segm_max
+        if cnt == 0 {
+            ; first
+            tsegm(idx, 0) = 25.0     ; count
+            tsegm(idx, 1) = 0.0      ; curve
+            tsegm(idx, 2) = 0.0      ; pitch
+            tsegm(idx, 3) = 0.0      ; billboard
+            idx++
+            continue
+        }
+        if cnt == 1 {
+            tsegm(idx, 0) = 28.0     ; count
+            tsegm(idx, 1) = 0.0      ; curve
+            tsegm(idx, 2) = 0.0      ; pitch
+            tsegm(idx, 3) = double(BB_BEAM)  ; billboard
+            idx++
+            continue
+        }
+        if cnt >= (segm_max - 1) {
+            ; last
+            tsegm(idx, 0) = 50.0     ; count
+            tsegm(idx, 1) = 0.0      ; curve
+            tsegm(idx, 2) = 0.0      ; pitch
+            tsegm(idx, 3) = double(BB_TREE)  ; billboard
+            idx++
+            break
+        }
+        
+        ; curve量決定
+        r = rnd(100)
+        if r <= 60 {
+            curve = double(rnd(400)) * 0.01
+            if r >= 30 : curve = curve * -1.0
+        } else {
+            curve = 0.0
+        }
+        
+        ; pitch量決定
+        r = rnd(100)
+        if r <= 60 {
+            pitch = double(rnd(100)) * 0.01
+            if r >= 30 : pitch = pitch * -1.0
+        } else {
+            pitch = 0.0
+        }
+        
+        ; ビルボード種類決定
+        k = 0
+        r = rnd(100)
+        repeat length(rlist)
+            if r <= rlist(cnt) {
+                k = cnt
+                break
+            }
+        loop
+        
+        switch k
+        case 0
+            bbkind = 0.0
+            count = 20 + rnd(20)
+            swbreak
+        case 1
+            bbkind = BB_TREE
+            count = 30 + rnd(150)
+            swbreak
+        case 2
+            bbkind = BB_GRASS
+            count = 30 + rnd(100)
+            swbreak
+        case 3
+            bbkind = BB_HOUSE
+            count = 50 + rnd(30)
+            swbreak
+        case 4
+            bbkind = BB_SLOPEL
+            count = 30 + rnd(30)
+            if curve < -2.0 or curve > 2.0 : curve = curve * 0.5
+            if pitch < -0.5 or pitch > 0.5 : pitch = pitch * 0.5
+            swbreak
+        case 5
+            bbkind = BB_SLOPER
+            count = 30 + rnd(30)
+            if curve < -2.0 or curve > 2.0 : curve = curve * 0.5
+            if pitch < -0.5 or pitch > 0.5 : pitch = pitch * 0.5
+            swbreak
+        swend
+        
+        if curve > 1.0 or curve < -1.0 {
+            ; road sign L or R
+            ; 急カーブの前に標識を置く
+            tsegm(idx, 0) = 20.0
+            tsegm(idx, 1) = 0.0
+            tsegm(idx, 2) = 0.0
+            if curve > 1.0 {
+                tsegm(idx, 3) = double(BB_ARROWL)
+            } else {
+                tsegm(idx, 3) = double(BB_ARROWR)
+            }
+            idx++
+        }
+        
+        tsegm(idx, 0) = double(count)
+        tsegm(idx, 1) = curve
+        tsegm(idx, 2) = pitch
+        tsegm(idx, 3) = double(bbkind)
+        idx++
+    loop
+    
+    ; 実際に参照される配列に値をコピーして配列要素数を切り詰める
+    ddim segm, idx, 4
+    repeat idx
+        segm(cnt, 0) = tsegm(cnt, 0)
+        segm(cnt, 1) = tsegm(cnt, 1)
+        segm(cnt, 2) = tsegm(cnt, 2)
+        segm(cnt, 3) = tsegm(cnt, 3)
+    loop
+    
+    return
+
+; ----------------------------------------
+*display_preview
+    ; Screensaver Preview
+    ; スクリーンセーバ選択時の小画面内のプレビュー表示処理。
+    ; プレビューモードでは、HSPのメイン画面(ウインドゥID0)が、
+    ; プレビュー画面に合わせて小さくなっているので、
+    ; ginfo_winx, ginfo_winy で画面サイズを取得して、その中に描画する。
+    ; bmp画像は 152 x 112 dot のサイズで用意する。
+    ;
+    ; サンプル arusave.hsp のコメントでは、
+    ; プレビューモード時も実際のスクリーンセーバ処理を
+    ; 描画したほうがいいとされているが、
+    ; HSPで作成するスクリーンセーバでそういう処理をすると、
+    ; 毎回不正終了してWindowsのログに残ってしまう。
+    ; 静止画像を表示して即座に終了してしまったほうが良い。
+    
+    cls 4
+    
+    ; load preview image
+    picid = 4
+    buffer picid, 640, 480
+    picload PREVIEW_FILE
+    
+    ; get image size
+    img_w = ginfo_winx
+    img_h = ginfo_winy
+    
+    ; get windows size
+    gsel 0, 1
+    dw = ginfo_winx
+    dh = ginfo_winy
+    
+    pos 0, 0
+    gzoom dw + 1, dh + 1, picid, 0, 0, img_w, img_h, 1
+    stop
+    goto *jobend
+    
+; ----------------------------------------
+*display_config
+    ; 設定画面をレイアウトして表示
+    
+    screen 0, 640, 320, 0
+    
+    ts = "Config - " + TITLESTR + " " + VERSTR
+    title ts
+
+    gsel 0, 1
+    gmode gmode_gdi
+    
+    ; objmode 2
+    ; font "Tahoma", 14, 0
+    
+    y = 80
+    pos 40, y
+    s = strjoin(framerate_list)
+    listbox framerate_idx, 160, s
+    objprm 0, old_framerate_idx
+    
+    objsize 100
+    pos 180, y
+    s = ""
+    l = length(vscr_size)
+    repeat l
+        s += str(vscr_size(cnt, 0)) + "x" + str(vscr_size(cnt, 1))
+        if cnt != (l - 1) : s += "\n"
+    loop
+    listbox vscr_size_idx, 160, s
+    objprm 1, old_vscr_size_idx
+    
+    objsize 220, 60
+    pos 350, y
+    s = "gzoom+gcopy (Slow, Accurate)\n"
+    s += "grotate (Fast, Inaccurate)\n"
+    s += "gsquare (Fast, Inaccurate)"
+    listbox zoom_kind, 20, s
+    objprm 2, old_zoom_kind
+    
+    objsize 120, 40
+    pos 340, 170
+    chkbox "FPS display", fps_disp_enable
+    objprm 3, old_fps_disp_enable
+    
+    ; cancel, save buttons
+    objmode 2
+    font "Tahoma", 16, 0
+    objsize 120, 40
+    y = 260
+    pos 370, y
+    button gosub "Cancel", *jobend
+    pos 370 + 120 + 10, y
+    button gosub "Save", *save_ini
+    
+    ; labels
+    font "Tahoma", 20, 1, 3
+    color 1, 1, 1
+    objcolor 200, 200, 200
+    pos 20, 8
+    mes ts
+    
+    font "Tahoma", 14, 1
+    y = 50
+    pos 20, y
+    mes "Framerate (FPS)"
+    
+    pos 160, y
+    mes "Virtual screen size"
+    
+    pos 340, y
+    mes "Zoom kind"
+    
+    stop
+    
+#module
+#defcfunc strjoin array lst
+    l = length(lst)
+    s = ""
+    repeat l
+        s += str(lst(cnt))
+        if cnt != (l - 1) : s += "\n"
+    loop
+    return s
+#global
+
+; ----------------------------------------
+*save_ini
+    gosub *get_ini_filepath
+
+    ; iniファイルに書き込む内容を作成
+    ini_data = ""
+    notesel ini_data
+    
+    s = "; Frame rate (fps) / "
+    repeat length(framerate_list)
+        s += str(cnt) + ": " + framerate_list(cnt) + "FPS, "
+    loop
+    noteadd s
+    noteadd "framerate_idx=" + framerate_idx
+    noteadd ""
+    
+    s = "; Virtual screen size / "
+    repeat length(vscr_size)
+        s += str(cnt) + ": " + vscr_size(cnt, 0) + "x" + vscr_size(cnt, 1) + ", "
+    loop
+    noteadd s
+    noteadd "vscr_size_idx=" + vscr_size_idx
+    noteadd ""
+    
+    noteadd "; zoom processing kind"
+    noteadd "; 0: gzoom + gcopy, Slow, good accuracy"
+    noteadd "; 1: grotate, Fast, poor accuracy"
+    noteadd "; 2: gsquare, Fast, poor accuracy"
+    noteadd "zoom_kind=" + zoom_kind
+    noteadd ""
+    noteadd "; FPS display / 0: disable, 1: enable"
+    noteadd "fps_disp_enable=" + fps_disp_enable
+    
+    notesave ini_filepath
+    
+    dialog "Save " + ini_filepath, 0
+    
+    noteunsel
+    stop
+    
+; ----------------------------------------
+*get_ini_filepath
+    ; iniファイル名を取得
+    
+#ifdef _DEBUG
+    ; 開発用
+    
+    ini_filepath = INI_FILENAME
+#else
+    ; 本番用
+    
+    ; 自分自身のファイル名を取得
+    sdim filepath, 256
+    GetModuleFileName, varptr(filepath), 256
+
+    ; iniファイルのファイルパスを生成
+    fn = getpath(filepath, 8+1) ; ファイル名(拡張子除く)を取得
+    if fn == MYFILENAME {
+        ; 本番
+        ini_filepath = getpath(filepath, 1) + ".ini"
+    } else {
+        ; 開発時
+        ini_filepath = MYFILENAME + ".ini"
+    }
+#endif
+
+    logmes ".ini file : " + ini_filepath
+    return
+
+; ----------------------------------------
+*read_ini
+    ; read ini file
+    
+    gosub *default_ini_value_init
+    gosub *get_ini_filepath
+
+    ;; iniファイル読み込み用領域を確保
+    ini_data = ""
+    notesel ini_data
+
+    ; iniファイル存在チェック
+    exist ini_filepath
+    if strsize = -1 {
+        ; not found ini
+        logmes "Not found " + ini_filepath
+    } else {
+        ; iniファイルを読み込む
+        noteload ini_filepath
+        logmes "Load " + ini_filepath
+
+        ; 1行ずつ内容を解析して記録
+        sdim ld, 512
+        repeat notemax
+            noteget ld, cnt     ; 1行分を取得
+            
+            if instr(ld, 0, "framerate_idx=") >= 0 {
+                split ld, "=", kind, cmd
+                framerate_idx = int(cmd)
+            }
+            if instr(ld, 0, "vscr_size_idx=") >= 0 {
+                split ld, "=", kind, cmd
+                vscr_size_idx = int(cmd)
+            }
+            if instr(ld, 0, "zoom_kind=") >= 0 {
+                split ld, "=", kind, cmd
+                zoom_kind = int(cmd)
+            }
+            if instr(ld, 0, "fps_disp_enable=") >= 0 {
+                split ld, "=", kind, cmd
+                fps_disp_enable = int(cmd)
+            }
+        loop
+    }
+
+    noteunsel
+    
+    ; 結果をデバッグウインドウのログに出力
+    logmes "framerate_idx = " + framerate_idx
+    logmes "vscr_size_idx = " + vscr_size_idx
+    logmes "zoom_kind = " + zoom_kind
+    logmes "fps_disp_enable = " + fps_disp_enable
+    
+    old_framerate_idx = framerate_idx
+    old_vscr_size_idx = vscr_size_idx
+    old_zoom_kind = zoom_kind
+    old_fps_disp_enable = fps_disp_enable
+    
+    return
+
+*default_ini_value_init
+    ; デフォルト設定値で初期化
+    framerate_idx = 3
+    vscr_size_idx = 1
+    zoom_kind = 2
+    fps_disp_enable = 1
+    return
+
+*jobend
+    end

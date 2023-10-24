@@ -1,0 +1,268 @@
+    ; iniファイル書き換え処理
+    ; 設定ダイアログを表示してリストボックスで選んだ値でiniを変更
+    ;
+    ; Windows10 x64 22H2 + HSP3.7beta7
+    ; 2023/10/24 by mieki256
+
+    ; #uselib "kernel32"
+    ; #func GetModuleFileName "GetModuleFileNameA" int, int, int
+
+    #define TITLESTR    "Pseudo 3d road screensaver"
+    #define VERSTR      "1.0.0"
+    
+    #define INI_FILE    "p3drdscr.ini"
+    #packopt name       "p3drdscr_config"   ; exe filename
+    #packopt type       0                   ; generate ".exe"
+    #packopt xsize  600
+    #packopt ysize  320
+    #define SCRW    600
+    #define SCRH    320
+    
+    ; ----------------------------------------
+    ; フレームレート (FPS) / framerate
+    dim framerate_list, 9
+    framerate_list = 8, 10, 12, 15, 20, 24, 30, 50, 60
+    
+    ; ----------------------------------------
+    ; 仮想画面解像度 / virtual screen resolution
+
+    ; 配列初期化用マクロ
+    #define set_array_n2(%1, %2, %3, %4) \
+        %1(%2, 0) = %3 :\
+        %1(%2, 1) = %4 :
+    
+    dim vscr_size, 8, 2
+    ; 変数名, index, width, height
+    set_array_n2 vscr_size, 0,  320, 180
+    set_array_n2 vscr_size, 1,  480, 270
+    set_array_n2 vscr_size, 2,  512, 288
+    set_array_n2 vscr_size, 3,  640, 360
+    set_array_n2 vscr_size, 4,  800, 450
+    set_array_n2 vscr_size, 5, 1024, 576
+    set_array_n2 vscr_size, 6, 1280, 720
+    set_array_n2 vscr_size, 7, 1920, 1080
+    
+    ; ----------------------------------------
+    ; read value from ini file
+    gosub *default_ini_value_init
+    gosub *read_ini
+    
+    old_framerate_idx = framerate_idx
+    old_vscr_size_idx = vscr_size_idx
+    old_zoom_kind = zoom_kind
+    old_fps_disp_enable = fps_disp_enable
+    
+    screen 0, SCRW, SCRH, 0
+    
+    ; layout
+    gosub *layout_config_window
+    
+*mainloop
+    stop
+
+; ----------------------------------------
+*layout_config_window
+    screen 0, 640, 320, 0
+    
+    ts = "Config - " + TITLESTR + " " + VERSTR
+    title ts
+
+    gsel 0, 1
+    gmode gmode_gdi
+    
+    ; objmode 2
+    ; font "Tahoma", 14, 0
+    
+    y = 80
+    pos 40, y
+    s = strjoin(framerate_list)
+    listbox framerate_idx, 160, s
+    objprm 0, old_framerate_idx
+    
+    objsize 100
+    pos 180, y
+    s = ""
+    l = length(vscr_size)
+    repeat l
+        s += str(vscr_size(cnt, 0)) + "x" + str(vscr_size(cnt, 1))
+        if cnt != (l - 1) : s += "\n"
+    loop
+    listbox vscr_size_idx, 160, s
+    objprm 1, old_vscr_size_idx
+    
+    objsize 220, 60
+    pos 350, y
+    s = "gzoom+gcopy (Slow, Accurate)\n"
+    s += "grotate (Fast, Inaccurate)\n"
+    s += "gsquare (Fast, Inaccurate)"
+    listbox zoom_kind, 20, s
+    objprm 2, old_zoom_kind
+    
+    objsize 120, 40
+    pos 340, 170
+    chkbox "FPS display", fps_disp_enable
+    objprm 3, old_fps_disp_enable
+    
+    ; cancel, save buttons
+    objmode 2
+    font "Tahoma", 16, 0
+    objsize 120, 40
+    y = 260
+    pos 370, y
+    button gosub "Cancel", *jobend
+    pos 370 + 120 + 10, y
+    button gosub "Save", *save_ini
+    
+    ; labels
+    font "Tahoma", 20, 1, 3
+    color 1, 1, 1
+    objcolor 200, 200, 200
+    pos 20, 8
+    mes ts
+    
+    font "Tahoma", 14, 1
+    y = 50
+    pos 20, y
+    mes "Framerate (FPS)"
+    
+    pos 160, y
+    mes "Virtual screen size"
+    
+    pos 340, y
+    mes "Zoom kind"
+    
+    return
+    
+#module
+#defcfunc strjoin array lst
+    l = length(lst)
+    s = ""
+    repeat l
+        s += str(lst(cnt))
+        if cnt != (l - 1) : s += "\n"
+    loop
+    return s
+#global
+
+; ----------------------------------------
+*save_ini
+    gosub *get_ini_filepath
+
+    ; iniファイルに書き込む内容を作成
+    ini_data = ""
+    notesel ini_data
+    
+    s = "; Frame rate (fps) / "
+    repeat length(framerate_list)
+        s += str(cnt) + ": " + framerate_list(cnt) + "FPS, "
+    loop
+    noteadd s
+    noteadd "framerate_idx=" + framerate_idx
+    noteadd ""
+    
+    s = "; Virtual screen size / "
+    repeat length(vscr_size)
+        s += str(cnt) + ": " + vscr_size(cnt, 0) + "x" + vscr_size(cnt, 1) + ", "
+    loop
+    noteadd s
+    noteadd "vscr_size_idx=" + vscr_size_idx
+    noteadd ""
+    
+    noteadd "; zoom processing kind"
+    noteadd "; 0: gzoom + gcopy, Slow, good accuracy"
+    noteadd "; 1: grotate, Fast, poor accuracy"
+    noteadd "; 2: gsquare, Fast, poor accuracy"
+    noteadd "zoom_kind=" + zoom_kind
+    noteadd ""
+    noteadd "; FPS display / 0: disable, 1: enable"
+    noteadd "fps_disp_enable=" + fps_disp_enable
+    
+    notesave ini_filepath
+    
+    dialog "Save " + ini_filepath, 0
+    
+    noteunsel
+    stop
+    
+; ----------------------------------------
+*get_ini_filepath
+    ; iniファイル名を取得
+    
+    ini_filepath = INI_FILE
+    logmes ".ini file : " + ini_filepath
+    return
+
+; ----------------------------------------
+*read_ini
+    ; read ini file
+    
+    ; read ini file
+    
+    gosub *default_ini_value_init
+    gosub *get_ini_filepath
+
+    ;; iniファイル読み込み用領域を確保
+    ini_data = ""
+    notesel ini_data
+
+    ; iniファイル存在チェック
+    exist ini_filepath
+    if strsize = -1 {
+        ; not found ini
+        logmes "Not found " + ini_filepath
+    } else {
+        ; iniファイルを読み込む
+        noteload ini_filepath
+        logmes "Load " + ini_filepath
+
+        ; 1行ずつ内容を解析して記録
+        sdim ld, 512
+        repeat notemax
+            noteget ld, cnt     ; 1行分を取得
+            
+            if instr(ld, 0, "framerate_idx=") >= 0 {
+                split ld, "=", kind, cmd
+                framerate_idx = int(cmd)
+            }
+            if instr(ld, 0, "vscr_size_idx=") >= 0 {
+                split ld, "=", kind, cmd
+                vscr_size_idx = int(cmd)
+            }
+            if instr(ld, 0, "zoom_kind=") >= 0 {
+                split ld, "=", kind, cmd
+                zoom_kind = int(cmd)
+            }
+            if instr(ld, 0, "fps_disp_enable=") >= 0 {
+                split ld, "=", kind, cmd
+                fps_disp_enable = int(cmd)
+            }
+        loop
+    }
+
+    noteunsel
+    
+    ; 結果をデバッグウインドウのログに出力
+    logmes "framerate_idx = " + framerate_idx
+    logmes "vscr_size_idx = " + vscr_size_idx
+    logmes "zoom_kind = " + zoom_kind
+    logmes "fps_disp_enable = " + fps_disp_enable
+    
+    old_framerate_idx = framerate_idx
+    old_vscr_size_idx = vscr_size_idx
+    old_zoom_kind = zoom_kind
+    old_fps_disp_enable = fps_disp_enable
+    
+    return
+
+*default_ini_value_init
+    ; デフォルト設定値で初期化
+    framerate_idx = 3
+    vscr_size_idx = 1
+    zoom_kind = 2
+    fps_disp_enable = 1
+    return
+
+*jobend
+    end
+    
+
