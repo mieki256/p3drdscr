@@ -40,7 +40,7 @@
     #pack PREVIEW_FILE
 
     #define TITLESTR    "Pseudo 3d road screensaver"
-    #define VERSTR      "1.0.0"
+    #define VERSTR      "1.0.1"
     
     #define MYFILENAME      "p3drdscr"
     #define INI_FILENAME    "p3drdscr.ini"
@@ -48,9 +48,11 @@
 
 #ifdef SCRSAVER_ENABLE
     #packopt type 2             ; generate ".scr"
+    ; #packopt icon "icon.ico"
     #define MAIN_WDW_ID     2   ; Main window ID
 #else
     #packopt type 0             ; generate ".exe"
+    ; #packopt icon "icon.ico"
     #define MAIN_WDW_ID     0   ; Main window ID
 #endif
     
